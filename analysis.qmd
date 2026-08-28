@@ -1,0 +1,99 @@
+---
+title: "Analyzing School Districts and Americans' Time Use"
+author: Sydney Martin
+format: html
+execute:
+  echo: false
+---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(DBI)
+library(duckdb)
+library(dbplyr)
+```
+
+```{r}
+con_seda <- dbConnect(duckdb(), "data/seda_2025.duckdb")
+dbplyr_dist <- tbl(con_seda, "district_scores")
+```
+
+```{r}
+#| cache: true
+#| cache.extra: !expr file.mtime("data/seda_2025.duckdb")
+score_change <- dbplyr_dist |>
+  filter(year %in% c(2015, 2023), !is.na(rla_score)) |>
+  select(district_id, district_name, state, year, rla_score) |>
+  collect() |>
+  pivot_wider(names_from = year, values_from = rla_score, names_prefix = "rla_") |>
+  filter(!is.na(rla_2015), !is.na(rla_2023)) |>
+  mutate(rla_change = rla_2023 - rla_2015)
+
+state_change <- tbl(con_seda, "state_scores") |>
+  filter(year %in% c(2015, 2023), !is.na(rla_score)) |>
+  select(stateabb, state_name, year, rla_score) |>
+  collect() |>
+  pivot_wider(names_from = year, values_from = rla_score, names_prefix = "rla_") |>
+  filter(!is.na(rla_2015), !is.na(rla_2023)) |>
+  mutate(rla_change = rla_2023 - rla_2015)
+```
+
+```{r}
+dist_2023 <- dbplyr_dist |>
+  filter(year == 2023, !is.na(rla_score)) |>
+  collect()
+
+ggplot(dist_2023, aes(x = rla_score)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "darkred") +
+  labs(
+    title = "Distribution of District Reading Scores, 2023",
+    subtitle = paste0("n = ", nrow(dist_2023), " districts; most cluster near average, left tail shows the lowest-scoring"),
+    x = "Reading score (grade-equivalents above/below national average)",
+    y = "Number of districts",
+    caption = "Source: Reardon et al. (2026). Stanford Education Data Archive (SEDA 2025.1)."
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(score_change, aes(x = rla_change)) +
+  geom_histogram(bins = 60, aes(fill = rla_change < 0), show.legend = FALSE) +
+  scale_fill_manual(values = c("TRUE" = "tomato", "FALSE" = "steelblue")) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  labs(
+    title = "Change in District Reading Scores, 2015 to 2023",
+    subtitle = paste0("n = ", nrow(score_change), " districts; about 79% scored lower in 2023 than in 2015"),
+    x = "Score change (grade-equivalents)",
+    y = "Number of districts",
+    caption = "Source: Reardon et al. (2026). Stanford Education Data Archive (SEDA 2025.1)."
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#| fig.height: 10
+state_change |>
+  arrange(rla_2023) |>
+  mutate(state_name = fct_inorder(state_name)) |>
+  ggplot(aes(y = state_name)) +
+  geom_segment(
+    aes(x = rla_2015, xend = rla_2023, yend = state_name,
+        color = rla_change > 0),
+    arrow = arrow(length = unit(0.15, "cm"), type = "closed"),
+    linewidth = 0.7,
+    show.legend = FALSE
+  ) +
+  geom_point(aes(x = rla_2015), color = "gray60", size = 1) +
+  scale_color_manual(values = c("TRUE" = "steelblue", "FALSE" = "tomato")) +
+  labs(
+    title = "State Reading Score Changes, 2015 to 2023",
+    subtitle = "Arrows point left (decline) in 49 of 51 jurisdictions; only Mississippi and Hawaii gained",
+    x = "Reading score (grade-equivalents)",
+    y = NULL,
+    caption = "Source: Reardon et al. (2026). Stanford Education Data Archive (SEDA 2025.1)."
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 9))
+```
